@@ -48,20 +48,28 @@ struct Source
 
 void fill_audio(void *userdata, u08 *stream, s32 len)
 {
+    // The callback must completely initialize the buffer; as of SDL 2.0, this buffer is not initialized before the callback is called. If there is nothing to play, the callback should fill the buffer with silence.
+
     Assert(userdata != 0);
     Source *src = (Source*)userdata;
 
-    if (src->remaining < 0)
-        return;
+    if (src->remaining <= 0)
+    {
+        SDL_memset(stream, 0, len);
+    }
+    else
+    {
+        if (len > src->remaining)
+            len = src->remaining;
 
-    if (len > src->remaining)
-        len = src->remaining;
+        SDL_memcpy(stream, src->position, len);
+        src->position += len;
+        src->remaining -= len;
+    }
 
-    SDL_memcpy(stream, src->position, len);
-    src->position += len;
-    src->remaining -= len;
 }
 
+#include <stdio.h>
 int main(int argc, char **argv)
 {
     if (SDL_Init(SDL_INIT_AUDIO) < 0)
@@ -70,7 +78,8 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    #if 1
+    // Callback API, load ogg
+    #if 0
     int vb_channels, vb_sample_rate;
     s16 *vb_buffer;
     int vb_result = stb_vorbis_decode_filename("../music2.ogg",
@@ -80,9 +89,11 @@ int main(int argc, char **argv)
         Printf("Could not load\n");
     }
 
-    Printf("channels = %d\n", vb_channels);
-    Printf("sample_rate = %d\n", vb_sample_rate);
-    Printf("result = %d\n", vb_result);
+    Printf("Frequency: %d\n", vb_sample_rate);
+    Printf("Channels: %d\n", vb_channels);
+    Printf("Samples: %d samples/channel\n", vb_result);
+    Printf("Total size: %d bytes\n", vb_result*sizeof(s16)*vb_channels);
+    Printf("Duration: = %.2f seconds\n", (vb_result) / (r32)(vb_sample_rate));
 
     Source src = {};
     src.chunk = (u08*)vb_buffer;
@@ -94,7 +105,7 @@ int main(int argc, char **argv)
     audio.freq = vb_sample_rate;
     audio.format = AUDIO_S16;
     audio.channels = vb_channels;
-    audio.samples = vb_result;
+    audio.samples = 4096;
     audio.callback = fill_audio;
     audio.userdata = &src;
 
@@ -112,11 +123,12 @@ int main(int argc, char **argv)
 
     #endif
 
-    #if 0
+    // Callback API, load WAV
+    #if 1
     SDL_AudioSpec wav_spec;
     u08 *wav_buffer;
     u32 wav_len;
-    char *filename = "../violin.wav";
+    char *filename = "../bgm2.wav";
 
     if (!SDL_LoadWAV(filename, &wav_spec, &wav_buffer, &wav_len))
     {
@@ -124,11 +136,22 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    Printf("freq = %d\n", wav_spec.freq);
-    Printf("format = %d\n", wav_spec.format);
-    Printf("channels = %d\n", wav_spec.channels);
-    Printf("samples = %d\n", wav_spec.samples);
-    Printf("wav_len = %d\n", wav_len);
+    Printf("Loaded %s\n", filename);
+    Printf("Frequency: %d\n", wav_spec.freq);
+    Printf("Channels: %d\n", wav_spec.channels);
+    Printf("Buffer: %d bytes per unit\n", wav_spec.samples);
+    Printf("Bits/Sample: %d\n", SDL_AUDIO_BITSIZE(wav_spec.format));
+    Printf("Signed: %d\n", SDL_AUDIO_ISSIGNED(wav_spec.format));
+    Printf("LEndian: %d\n", SDL_AUDIO_ISLITTLEENDIAN(wav_spec.format));
+    Printf("Float: %d\n", SDL_AUDIO_ISFLOAT(wav_spec.format));
+    Printf("Format: 0x%x\n", wav_spec.format);
+    Printf("Total size: %d bytes\n", wav_len);
+
+    int channels = wav_spec.channels;
+    int frequency = wav_spec.freq;
+    int num_bytes = SDL_AUDIO_BITSIZE(wav_spec.format) / 8;
+    Printf("Duration: = %.2f s\n",
+           (wav_len) / (r32)(channels*frequency*num_bytes));
 
     Source src = {};
     src.chunk = wav_buffer;
@@ -152,11 +175,16 @@ int main(int argc, char **argv)
     SDL_PauseAudio(0);
     // while (src.remaining > 0)
     // {
-    //     SDL_Delay(1000);
+    //     printf("\r%d\t\t\t\t\t", src.remaining);
+    //     SDL_Delay(5);
     // }
-    // SDL_CloseAudio();
+    printf("> ");
+    char input[256];
+    scanf("%s", &input);
+    SDL_CloseAudio();
     #endif
 
+    // Audio synthesis
     #if 0
     #define DSP_Freq (22050)
     #define Num_Samples ((DSP_Freq)*2)
@@ -195,6 +223,7 @@ int main(int argc, char **argv)
     SDL_CloseAudio();
     #endif
 
+    // Floating point synthesis, AudioDevice
     #if 0
     #define DSP_Freq (48000)
     #define Num_Samples ((DSP_Freq)*1)
@@ -236,6 +265,7 @@ int main(int argc, char **argv)
     }
     SDL_CloseAudioDevice(audio_device);
     #endif
+
     SDL_Quit();
     return 0;
 }
