@@ -43,10 +43,48 @@ struct Source
     u08 *chunk;    // Pointer to start of audio
     s32 length;    // Length of audio data in bytes
     s32 remaining;
+    u32 channels;
+    u32 bytes_per_sample;
     u08 *position;
 };
 
-void fill_audio(void *userdata, u08 *stream, s32 len)
+void audio_lowpass(s16 *input,
+                   s16 *result,
+                   u32 num_channels,
+                   u32 samples_to_process)
+{
+    // working buffers
+    r32 x[3];
+    r32 y[3];
+
+    r32 a1 = -1.9f;
+    r32 a2 = 0.91f;
+    r32 k = 0.00102f;
+    r32 b1 = 2.0f;
+    r32 b2 = 1.0f;
+    y[0] = 0.0f;
+    y[1] = 0.0f;
+    x[0] = (r32)input[0] / 32768.0f;
+    x[1] = (r32)input[num_channels] / 32768.0f;
+    result[0] = input[0];
+    result[num_channels] = input[num_channels];
+    for (u32 n = 2; n < samples_to_process; n++)
+    {
+        x[2] = (r32)input[n*num_channels] / 32768.0f;
+        y[2] = -a1*y[1] - a2*y[0] + k*(x[2] + b1*x[1] + b2*x[0]);
+
+        x[0] = x[1];
+        x[1] = x[2];
+        y[0] = y[1];
+        y[1] = y[2];
+
+        if (y[2] > 1.0f) y[2] = 1.0f;
+        else if (y[2] < -1.0f) y[2] = -1.0f;
+        result[n*num_channels] = (s16)(y[2] * 32766.0f);
+    }
+}
+
+void audio_callback(void *userdata, u08 *stream, s32 len)
 {
     // The callback must completely initialize the buffer; as of SDL 2.0, this buffer is not initialized before the callback is called. If there is nothing to play, the callback should fill the buffer with silence.
 
@@ -63,10 +101,16 @@ void fill_audio(void *userdata, u08 *stream, s32 len)
             len = src->remaining;
 
         SDL_memcpy(stream, src->position, len);
+        s16 *lch_src = (s16*)src->position;
+        s16 *rch_src = lch_src + 1;
+        s16 *lch_dst = (s16*)stream;
+        s16 *rch_dst = lch_dst + 1;
+        u32 chsamples = len / (src->channels*src->bytes_per_sample);
+        audio_lowpass(lch_src, lch_dst, src->channels, chsamples);
+        audio_lowpass(rch_src, rch_dst, src->channels, chsamples);
         src->position += len;
         src->remaining -= len;
     }
-
 }
 
 #include <stdio.h>
@@ -106,7 +150,7 @@ int main(int argc, char **argv)
     audio.format = AUDIO_S16;
     audio.channels = vb_channels;
     audio.samples = 4096;
-    audio.callback = fill_audio;
+    audio.callback = audio_callback;
     audio.userdata = &src;
 
     if (SDL_OpenAudio(&audio, 0) != 0)
@@ -157,14 +201,17 @@ int main(int argc, char **argv)
     src.chunk = wav_buffer;
     src.length = wav_len;
     src.position = src.chunk;
+    src.channels = wav_spec.channels;
+    src.bytes_per_sample = SDL_AUDIO_BITSIZE(wav_spec.format) / 8;
     src.remaining = src.length;
 
     SDL_AudioSpec audio;
     audio.freq = wav_spec.freq;
     audio.format = wav_spec.format;
     audio.channels = wav_spec.channels;
-    audio.samples = wav_spec.samples;
-    audio.callback = fill_audio;
+    audio.samples = 16384;
+    // audio.samples = wav_spec.samples;
+    audio.callback = audio_callback;
     audio.userdata = &src;
 
     if (SDL_OpenAudio(&audio, 0) != 0)
@@ -182,88 +229,6 @@ int main(int argc, char **argv)
     char input[256];
     scanf("%s", &input);
     SDL_CloseAudio();
-    #endif
-
-    // Audio synthesis
-    #if 0
-    #define DSP_Freq (22050)
-    #define Num_Samples ((DSP_Freq)*2)
-    s16 samples[Num_Samples];
-    for (u32 i = 0; i < Num_Samples; i++)
-    {
-        r32 t = i / (r32)DSP_Freq;
-        r32 f = 440.0f;
-        r32 x = -1.0f + 2.0f * sin(f*TWO_PI*t);
-        samples[i] = (s16)(0.05f*65535.0f*x);
-    }
-    Source src = {};
-    src.chunk = (u08*)samples;
-    src.length = sizeof(samples);
-    src.position = src.chunk;
-    src.remaining = src.length;
-
-    SDL_AudioSpec audio;
-    audio.format = AUDIO_S16;
-    audio.channels = 1;
-    audio.callback = fill_audio;
-    audio.userdata = &src;
-    audio.freq = 22050;
-    audio.samples = 4096;
-
-    if (SDL_OpenAudio(&audio, 0) != 0)
-    {
-        Printf("Failed to open audio device: %s\n", SDL_GetError());
-    }
-
-    SDL_PauseAudio(0);
-    while (src.remaining > 0)
-    {
-        SDL_Delay(1000);
-    }
-    SDL_CloseAudio();
-    #endif
-
-    // Floating point synthesis, AudioDevice
-    #if 0
-    #define DSP_Freq (48000)
-    #define Num_Samples ((DSP_Freq)*1)
-    r32 samples[Num_Samples];
-    for (u32 i = 0; i < Num_Samples; i++)
-    {
-        r32 t = i / (r32)DSP_Freq;
-        r32 x = -1.0f + 2.0f * sin(440.0f*TWO_PI*t);
-        r32 y = -1.0f + 2.0f * sin(554.0f*TWO_PI*t);
-        r32 z = -1.0f + 2.0f * sin(659.0f*TWO_PI*t);
-        samples[i] = 0.33f*x + 0.33f*y + 0.33f*z;
-    }
-    Source src = {};
-    src.chunk = (u08*)samples;
-    src.length = sizeof(samples);
-    src.position = src.chunk;
-    src.remaining = src.length;
-
-    SDL_AudioSpec desired, obtained;
-    desired.freq = DSP_Freq;
-    desired.format = AUDIO_F32;
-    desired.channels = 1;
-    desired.samples = 4096;
-    desired.callback = fill_audio;
-    desired.userdata = &src;
-    SDL_AudioDeviceID audio_device =
-        SDL_OpenAudioDevice(0, 0, &desired, &obtained,
-        SDL_AUDIO_ALLOW_FORMAT_CHANGE);
-    if (!audio_device)
-    {
-        Printf("Failed to open audio device\n");
-        return -1;
-    }
-
-    SDL_PauseAudioDevice(audio_device, 0);
-    while (src.remaining > 0)
-    {
-        SDL_Delay(1000);
-    }
-    SDL_CloseAudioDevice(audio_device);
     #endif
 
     SDL_Quit();
