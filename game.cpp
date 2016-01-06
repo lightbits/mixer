@@ -433,14 +433,18 @@ void audio_callback(void *userdata, u08 *stream, s32 bytes_to_fill)
     // mix sources
     static r32 mix_buffer[MIX_BUFFER_SAMPLES];
     SDL_memset(mix_buffer, 0, sizeof(mix_buffer));
-    for (u32 s = 0; s < AUDIO_MAX_PLAYING; s++)
+    for (u32 source_index = 0;
+         source_index < AUDIO_MAX_PLAYING;
+         source_index++)
     {
-        Source *source = audio->sources[s];
+        Source *source = audio->sources[source_index];
         if (!source)
             continue;
         r32 gain_l = source->gain_l;
         r32 gain_r = source->gain_r;
-        for (s32 s = 0; s < samples_to_fill; s += 2)
+        for (s32 sample_index = 0;
+             sample_index < samples_to_fill;
+             sample_index += 2)
         {
             if (source->remaining > 0)
             {
@@ -453,8 +457,8 @@ void audio_callback(void *userdata, u08 *stream, s32 bytes_to_fill)
                 xr32_l = source_s16_to_r32(xs16_l);
                 xr32_r = source_s16_to_r32(xs16_r);
 
-                mix_buffer[s] += gain_l * xr32_l;
-                mix_buffer[s+1] += gain_r * xr32_r;
+                mix_buffer[sample_index] += gain_l * xr32_l;
+                mix_buffer[sample_index+1] += gain_r * xr32_r;
 
                 source->position += 2;
                 source->remaining -= 2;
@@ -466,6 +470,9 @@ void audio_callback(void *userdata, u08 *stream, s32 bytes_to_fill)
             }
             else
             {
+                source->playing = 0;
+                audio->sources[source_index] = 0;
+                audio->num_playing--;
                 break;
             }
         }
@@ -553,18 +560,14 @@ int main(int argc, char **argv)
         {
             if (time_since(start_tick) > 4.0f)
             {
-                // audio_PlaySource(&mixer, &bgm2, AUDIO_RESUME);
-            }
-            else if (time_since(start_tick) > 2.0f)
-            {
                 audio_PlaySource(&mixer, &sfx1);
                 // audio_StopSource(&mixer, &bgm2);
             }
             SDL_Delay(14);
             game_update(&running);
             Printf("update %.2f %d\n",
-                   1000.0f * time_since(last_update),
-                   bgm2.remaining);
+                   time_since(start_tick),
+                   sfx1.remaining);
             last_update = get_tick();
             tick_timer += frame_time;
         }
