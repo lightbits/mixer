@@ -299,9 +299,9 @@ struct Audio
 
 enum audio_Flags
 {
-    AUDIO_NOFLAG = 0,
-    AUDIO_REPEAT,
-    AUDIO_RESTART
+    AUDIO_NOFLAG = 0, // Play once and stop
+    AUDIO_REPEAT,     // Repeat forever
+    AUDIO_RESTART     // Restart if not already playing
 };
 
 void audio_StartSource(Audio *audio,
@@ -511,6 +511,15 @@ int main(int argc, char **argv)
 
                 // artificial delay, to save battery
                 SDL_Delay(14);
+
+                if (time_since(start_tick) > 4.0f)
+                {
+                    audio_StartSource(&mixer, &bgm2, AUDIO_RESTART);
+                }
+                else if (time_since(start_tick) > 2.0f)
+                {
+                    audio_StopSource(&mixer, &bgm2);
+                }
             }
 
             Printf("update %.2f %d\n",
