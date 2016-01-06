@@ -407,6 +407,7 @@ int main(int argc, char **argv)
 
     audio_id bgm1 = audio_stream(bgm2_src);
     audio_id bgm2 = audio_stream(bgm2_src);
+    audio_id sfx1 = audio_stream(sfx1_src);
     audio_play(bgm1);
 
     u64 start_tick = get_tick();
@@ -434,7 +435,13 @@ int main(int argc, char **argv)
                 if (time_since(start_tick) > 2.0f)
                 {
                     audio_play(bgm2);
-                    audio_gain(bgm2, 1.0f, 1.0f);
+                    audio_gain(bgm2, gain_r, gain_l);
+                }
+
+                if (time_since(start_tick) > 4.0f)
+                {
+                    audio_stop(bgm1);
+                    audio_play(sfx1, Audio_Repeat);
                 }
                 // else if (time_since(start_tick) > 2.0f)
                 // {
