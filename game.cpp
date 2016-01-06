@@ -330,6 +330,10 @@ void audio_PlaySource(Audio *audio,
                       Source *source,
                       audio_Flags flags = AUDIO_NOFLAGS)
 {
+    // I check if the source is playing or not here
+    // to avoid unecessary cmd buffer overflow. However,
+    // the playing state is not set to 1 here since the
+    // audio callback might be modifying it.
     if (audio->num_cmds < AUDIO_MAX_CMDS &&
         !source->playing)
     {
@@ -345,6 +349,10 @@ void audio_PlaySource(Audio *audio,
 void audio_StopSource(Audio *audio,
                       Source *source)
 {
+    // I check if the source is playing or not here
+    // to avoid unecessary cmd buffer overflow. However,
+    // the playing state is not set to 1 here since the
+    // audio callback might be modifying it.
     if (audio->num_cmds < AUDIO_MAX_CMDS &&
         source->playing)
     {
@@ -393,6 +401,12 @@ void audio_callback(void *userdata, u08 *stream, s32 bytes_to_fill)
         {
             case AUDIO_PLAY:
             {
+                // I also check if the source is playing or not
+                // here, since it may have been started by a previous
+                // command just processed.
+                if (cmd.ref->playing)
+                    break;
+
                 if (audio->num_playing == AUDIO_MAX_PLAYING)
                     break;
 
@@ -511,6 +525,7 @@ float time_since(u64 then)
 }
 
 #include <stdio.h>
+#include <math.h>
 int main(int argc, char **argv)
 {
     if (SDL_Init(SDL_INIT_AUDIO) < 0)
@@ -529,7 +544,7 @@ int main(int argc, char **argv)
         mixer.sources[s] = 0;
     audio_SetGain(&sfx1, 1.0f, 1.0f);
     audio_SetGain(&bgm2, 0.5f, 0.5f);
-    // audio_PlaySource(&mixer, &bgm2, AUDIO_NOFLAGS);
+    audio_PlaySource(&mixer, &bgm2);
     audio_PlaySource(&mixer, &sfx1);
 
     SDL_AudioSpec audio;
@@ -558,11 +573,21 @@ int main(int argc, char **argv)
     {
         if (tick_timer <= 0.0f)
         {
+            if (!sfx1.playing)
+            {
+                static int mode = 0;
+                mode = (mode + 1) % 2;
+                audio_PlaySource(&mixer, &sfx1);
+            }
             if (time_since(start_tick) > 4.0f)
             {
-                audio_PlaySource(&mixer, &sfx1);
-                // audio_StopSource(&mixer, &bgm2);
+                audio_StopSource(&mixer, &sfx1);
             }
+            r32 gain_l = 0.5f + 0.5f * sin(time_since(start_tick));
+            r32 gain_r = 0.5f + 0.5f * cos(time_since(start_tick));
+            audio_SetGain(&sfx1, gain_r, gain_l);
+            audio_SetGain(&bgm2, gain_l, gain_r);
+
             SDL_Delay(14);
             game_update(&running);
             Printf("update %.2f %d\n",
