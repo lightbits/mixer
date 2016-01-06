@@ -62,8 +62,8 @@ while by the SDL audio callback.
 void audio_PlaySource(Source *src,
                       audio_Flags flags = audio_NoFlags)
 {
-    Assert(audio.count <= audio_MaxSources);
-    if (audio.count == audio_MaxSources)
+    Assert(audio.count <= AUDIO_MAX_SOURCES);
+    if (audio.count == AUDIO_MAX_SOURCES)
     {
         return;
     }
@@ -172,22 +172,23 @@ void tick()
 
 struct Source
 {
-    s16 *buffer;    // Pointer to start of audio
-    s32 length;    // Length of audio data in bytes
-    u32 channels;  // Number of interleaved channels
+    s16 *buffer; // Pointer to start of audio
+    s32 length; // Length of audio data in bytes
+    u32 channels; // Number of interleaved channels
     u32 bytes_per_sample;
 
     u32 samples_per_channel;
-    u32 samples_in_total; // Source_Channels x samples_per_channel
+    u32 samples_in_total; // channels x samples_per_channel
 
     s32 position; // Position in buffer of next sample to play
     s32 remaining; // Number of samples remaining to be played
 
-    // audio api state
+    // Reserved for audio api state
     bool playing;
     bool repeat;
-    r32 gain;
-    r32 pan;
+    r32 gain_l;
+    r32 gain_r;
+    u32 audio_index;
 };
 
 void free_source(Source *source)
@@ -242,8 +243,9 @@ Source load_source(char *filename)
 
     result.playing = 0;
     result.repeat = 0;
-    result.gain = 1.0f;
-    result.pan = 0.0f;
+    result.gain_l = 1.0f;
+    result.gain_r = 1.0f;
+    result.audio_index = 0;
 
     return result;
 }
@@ -268,8 +270,9 @@ Source make_source(s16 *data, u32 total_num_samples)
     result.remaining = result.samples_in_total;
     result.playing = 0;
     result.repeat = 0;
-    result.gain = 1.0f;
-    result.pan = 0.0f;
+    result.gain_l = 1.0f;
+    result.gain_r = 1.0f;
+    result.audio_index = 0;
     return result;
 }
 
@@ -287,25 +290,82 @@ r32 source_s16_to_r32(s16 x)
     return result;
 }
 
-#define audio_MaxSources 16
-struct Audio
+enum audio_CmdType
 {
-    Source *sources[audio_MaxSources];
-    u32 num_playing;
+    AUDIO_PLAY = 0,
+    AUDIO_STOP
 };
 
-void audio_PlaySource(Audio *audio, Source *source)
+enum audio_Flags {
+    AUDIO_NOFLAGS = 0,
+    AUDIO_RESUME,
+    AUDIO_REPEAT
+};
+
+struct AudioCmd
 {
-    if (source->playing)
-        return;
-    if (audio->num_playing < audio_MaxSources)
+    Source *ref;
+    audio_CmdType type;
+    audio_Flags flags;
+};
+
+#define AUDIO_MAX_PLAYING 16
+#define AUDIO_MAX_CMDS 32
+struct Audio
+{
+    Source *sources[AUDIO_MAX_PLAYING];
+    u32 num_playing;
+
+    // Modifying the list of sources to play while
+    // the callback might be processing it is a bad
+    // idea. So any calls to audio_PlaySource will
+    // queue a source to add to the play list in the
+    // cmd buffer. The sources will be added in the
+    // next callback.
+    AudioCmd cmds[AUDIO_MAX_CMDS];
+    u32 num_cmds;
+};
+
+void audio_PlaySource(Audio *audio,
+                      Source *source,
+                      audio_Flags flags = AUDIO_NOFLAGS)
+{
+    if (audio->num_cmds < AUDIO_MAX_CMDS &&
+        !source->playing)
     {
-        source->playing = 1;
-        source->position = 0;
-        source->remaining = source->samples_in_total;
-        audio->sources[audio->num_playing] = source;
-        audio->num_playing++;
+        AudioCmd cmd = {};
+        cmd.ref = source;
+        cmd.type = AUDIO_PLAY;
+        cmd.flags = flags;
+        audio->cmds[audio->num_cmds] = cmd;
+        audio->num_cmds++;
     }
+}
+
+void audio_StopSource(Audio *audio,
+                      Source *source)
+{
+    if (audio->num_cmds < AUDIO_MAX_CMDS &&
+        source->playing)
+    {
+        AudioCmd cmd = {};
+        cmd.ref = source;
+        cmd.type = AUDIO_STOP;
+        cmd.flags = AUDIO_NOFLAGS;
+        audio->cmds[audio->num_cmds] = cmd;
+        audio->num_cmds++;
+    }
+}
+
+void audio_SeekSource(Audio *audio, Source *source)
+{
+    // TODO: Add cmd
+}
+
+void audio_SetGain(Source *source, r32 gain_l, r32 gain_r)
+{
+    source->gain_l = gain_l;
+    source->gain_r = gain_r;
 }
 
 // The callback must completely initialize the buffer; as of SDL 2.0, this
@@ -323,38 +383,95 @@ void audio_callback(void *userdata, u08 *stream, s32 bytes_to_fill)
     #define MIX_BUFFER_SAMPLES (1024*Source_Channels)
     Assert(MIX_BUFFER_SAMPLES >= samples_to_fill);
 
+    Audio *audio = (Audio*)userdata;
+
+    // process commands
+    for (u32 c = 0; c < audio->num_cmds; c++)
+    {
+        AudioCmd cmd = audio->cmds[c];
+        switch (cmd.type)
+        {
+            case AUDIO_PLAY:
+            {
+                if (audio->num_playing == AUDIO_MAX_PLAYING)
+                    break;
+
+                // use first available slot
+                for (u32 s = 0; s < AUDIO_MAX_PLAYING; s++)
+                {
+                    if (!audio->sources[s])
+                    {
+                        cmd.ref->playing = 1;
+                        if (cmd.flags & AUDIO_REPEAT)
+                            cmd.ref->repeat = 1;
+                        if (!(cmd.flags & AUDIO_RESUME))
+                        {
+                            cmd.ref->position = 0;
+                            cmd.ref->remaining = cmd.ref->samples_in_total;
+                        }
+                        cmd.ref->audio_index = s;
+                        audio->sources[s] = cmd.ref;
+                        audio->num_playing++;
+                        break;
+                    }
+                }
+            } break;
+
+            case AUDIO_STOP:
+            {
+                if (cmd.ref->playing)
+                {
+                    cmd.ref->playing = 0;
+                    audio->sources[cmd.ref->audio_index] = 0;
+                    audio->num_playing--;
+                }
+            } break;
+        }
+    }
+    audio->num_cmds = 0;
+
+    // mix sources
     static r32 mix_buffer[MIX_BUFFER_SAMPLES];
     SDL_memset(mix_buffer, 0, sizeof(mix_buffer));
-
-    Source *source = (Source*)userdata;
-
-    r32 gain_l = 1.0f;
-    r32 gain_r = 1.0f;
-    for (s32 s = 0; s < samples_to_fill; s += 2)
+    for (u32 s = 0; s < AUDIO_MAX_PLAYING; s++)
     {
-        if (source->remaining > 0)
+        Source *source = audio->sources[s];
+        if (!source)
+            continue;
+        r32 gain_l = source->gain_l;
+        r32 gain_r = source->gain_r;
+        for (s32 s = 0; s < samples_to_fill; s += 2)
         {
-            s16 xs16_l, xs16_r;
-            r32 xr32_l, xr32_r;
+            if (source->remaining > 0)
+            {
+                s16 xs16_l, xs16_r;
+                r32 xr32_l, xr32_r;
 
-            xs16_l = source->buffer[source->position];
-            xs16_r = source->buffer[source->position+1];
+                xs16_l = source->buffer[source->position];
+                xs16_r = source->buffer[source->position+1];
 
-            xr32_l = source_s16_to_r32(xs16_l);
-            xr32_r = source_s16_to_r32(xs16_r);
+                xr32_l = source_s16_to_r32(xs16_l);
+                xr32_r = source_s16_to_r32(xs16_r);
 
-            mix_buffer[s] = gain_l * xr32_l;
-            mix_buffer[s+1] = gain_r * xr32_r;
+                mix_buffer[s] += gain_l * xr32_l;
+                mix_buffer[s+1] += gain_r * xr32_r;
 
-            source->position += 2;
-            source->remaining -= 2;
-        }
-        else
-        {
-            break;
+                source->position += 2;
+                source->remaining -= 2;
+            }
+            else if (source->repeat)
+            {
+                source->position = 0;
+                source->remaining = source->samples_in_total;
+            }
+            else
+            {
+                break;
+            }
         }
     }
 
+    // write result to output stream
     s16 *out = (s16*)stream;
     for (s32 s = 0; s < samples_to_fill; s++)
     {
@@ -396,10 +513,17 @@ int main(int argc, char **argv)
     }
 
     Source bgm2 = load_source("../bgm2.wav");
+    Source sfx1 = load_source("../fx1.wav");
 
-    // Audio mixer = {};
-    // mixer.num_playing = 0;
-    // audio_PlaySource(&mixer, &bgm2);
+    Audio mixer = {};
+    mixer.num_playing = 0;
+    mixer.num_cmds = 0;
+    for (u32 s = 0; s < AUDIO_MAX_PLAYING; s++)
+        mixer.sources[s] = 0;
+    audio_SetGain(&sfx1, 1.0f, 1.0f);
+    audio_SetGain(&bgm2, 0.5f, 0.5f);
+    // audio_PlaySource(&mixer, &bgm2, AUDIO_NOFLAGS);
+    audio_PlaySource(&mixer, &sfx1);
 
     SDL_AudioSpec audio;
     audio.freq = Source_Sample_Rate;
@@ -407,7 +531,7 @@ int main(int argc, char **argv)
     audio.channels = Source_Channels;
     audio.samples = Source_Frame_Size;
     audio.callback = audio_callback;
-    audio.userdata = &bgm2;
+    audio.userdata = &mixer;
 
     if (SDL_OpenAudio(&audio, 0) != 0)
     {
@@ -427,6 +551,15 @@ int main(int argc, char **argv)
     {
         if (tick_timer <= 0.0f)
         {
+            if (time_since(start_tick) > 4.0f)
+            {
+                // audio_PlaySource(&mixer, &bgm2, AUDIO_RESUME);
+            }
+            else if (time_since(start_tick) > 2.0f)
+            {
+                audio_PlaySource(&mixer, &sfx1);
+                // audio_StopSource(&mixer, &bgm2);
+            }
             SDL_Delay(14);
             game_update(&running);
             Printf("update %.2f %d\n",
