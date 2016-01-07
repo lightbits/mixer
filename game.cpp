@@ -124,6 +124,7 @@ void audio_play(audio_id id, audio_Flags flags = Audio_NoFlag)
         if (flags & Audio_Restart)
         {
             audio.streams[id].position = 0;
+            audio.streams[id].remaining = audio.streams[id].source.length;
         }
         if (flags & Audio_Repeat)
         {
@@ -339,19 +340,158 @@ float time_since(u64 then)
     return get_elapsed_time(then, now);
 }
 
+struct GameInput
+{
+    struct Key
+    {
+        bool down[SDL_NUM_SCANCODES];
+        bool released[SDL_NUM_SCANCODES];
+    } key;
+    int window_width;
+    int window_height;
+    r32 t;
+    r32 dt;
+};
+
+#define KEY_RELEASED(code) input.key.released[SDL_SCANCODE_##code]
+#define KEY_DOWN(code) input.key.down[SDL_SCANCODE_##code]
+void game_update(GameInput input)
+{
+    static bool loaded = 0;
+    static audio_Source sfx1_src;
+    static audio_Source sfx2_src;
+    static audio_Source sfx3_src;
+    static audio_Source sfx4_src;
+    static audio_Source sfx5_src;
+    static audio_Source sfx6_src;
+    static audio_Source bgm1_src;
+    static audio_Source bgm2_src;
+
+    static audio_id sfx1;
+    static audio_id sfx2;
+    static audio_id sfx3;
+    static audio_id sfx4;
+    static audio_id sfx5;
+    static audio_id sfx6;
+    static audio_id bgm1;
+    static audio_id bgm2;
+    if (!loaded)
+    {
+        bgm1_src = audio_load("../bgm1.wav");
+        bgm2_src = audio_load("../bgm2.wav");
+        sfx1_src = audio_load("../fx1.wav");
+        sfx2_src = audio_load("../fx2.wav");
+        sfx3_src = audio_load("../fx3.wav");
+        sfx4_src = audio_load("../fx4.wav");
+        sfx5_src = audio_load("../fx5.wav");
+        sfx6_src = audio_load("../fx6.wav");
+        sfx1 = audio_stream(sfx1_src);
+        sfx2 = audio_stream(sfx2_src);
+        sfx3 = audio_stream(sfx3_src);
+        sfx4 = audio_stream(sfx4_src);
+        sfx5 = audio_stream(sfx5_src);
+        sfx6 = audio_stream(sfx6_src);
+        bgm1 = audio_stream(bgm2_src);
+        bgm2 = audio_stream(bgm2_src);
+        audio_master_gain(0.01f, 0.01f);
+        loaded = 1;
+    }
+
+    #define PLAY_ON_KEY(key, sound) { if (KEY_RELEASED(key)) { audio_play(sound, Audio_Restart); audio_gain(sound, 1.0f, 1.0f); } }
+
+    r32 t = input.t;
+    PLAY_ON_KEY(1, sfx1);
+    PLAY_ON_KEY(2, sfx2);
+    PLAY_ON_KEY(3, sfx3);
+    PLAY_ON_KEY(4, sfx4);
+    PLAY_ON_KEY(5, sfx5);
+    PLAY_ON_KEY(6, sfx6);
+
+    if (KEY_RELEASED(SPACE))
+    {
+        audio_play(bgm2);
+    }
+
+    audio_gain(bgm2, 0.5f+0.5f*sin(t), 0.5f+0.5f*cos(t));
+
+    glViewport(0, 0, input.window_width, input.window_height);
+    r32 r = 0.2f * sin(0.3f * t + 0.11f) + 0.6f;
+    r32 g = 0.1f * sin(0.4f * t + 0.55f) + 0.3f;
+    r32 b = 0.3f * sin(0.5f * t + 1.44f) + 0.3f;
+    glClearColor(r, g, b, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    glBegin(GL_LINES);
+    {
+        u32 n = 8;
+        r32 pi = 3.1415926f;
+        for (u32 i = 0; i < n; i++)
+        {
+            r32 a = i / (r32)(n-1);
+            r32 w = a + 0.3f;
+            r32 p = a * pi / 8.0f;
+            r32 x0 = 0.5f*cos(w*t + p)*input.window_height/input.window_width;
+            r32 y0 = 0.5f*sin(w*t + p);
+            r32 x1 = -x0;
+            r32 y1 = -y0;
+            glColor3f(1.0f, 1.0f, 1.0f); glVertex2f(x0, y0 + 0.3f*sin(0.3f*t));
+            glColor3f(1.0f, 1.0f, 1.0f); glVertex2f(x1, y1 + 0.3f*sin(0.3f*t));
+        }
+
+        u32 wn = 4;
+        for (u32 wave = 0; wave < wn; wave++)
+        {
+            r32 p = wave / (r32)(wn);
+            u32 ln = 64;
+            for (u32 i = 0; i < ln; i++)
+            {
+                r32 a = i / (r32)(ln-1);
+                r32 b = (i+1) / (r32)(ln-1);
+                r32 x0 = -1.0f + 2.0f*a;
+                r32 x1 = -1.0f + 2.0f*b;
+                r32 y = -0.75f;
+                r32 y0 = y + (0.03f+0.03f*p)*sin(0.3f*t + (a+4.0f*p)*1.2f*pi)+0.02f*cos((2.0f+p)*t+a);
+                r32 y1 = y + (0.03f+0.03f*p)*sin(0.3f*t + (b+4.0f*p)*1.2f*pi)+0.02f*cos((2.0f+p)*t+b);
+                glColor3f(1.0f, 1.0f, 1.0f); glVertex2f(x0, y0);
+                glColor3f(1.0f, 1.0f, 1.0f); glVertex2f(x1, y1);
+            }
+        }
+    }
+    glEnd();
+}
+
 #include <stdio.h>
 #include <math.h>
 int main(int argc, char **argv)
 {
-    if (SDL_Init(SDL_INIT_AUDIO) < 0)
+    if (SDL_Init(SDL_INIT_EVERYTHING) < 0)
     {
         Printf("Failed to initialize SDL: %s\n", SDL_GetError());
         Assert(false);
     }
 
-    audio_Source bgm2_src = audio_load("../bgm2.wav");
-    audio_Source sfx1_src = audio_load("../fx3.wav");
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
 
+    int window_width = 640;
+    int window_height = 480;
+    SDL_Window *window = SDL_CreateWindow(
+        "Hello world!",
+        SDL_WINDOWPOS_UNDEFINED,
+        SDL_WINDOWPOS_UNDEFINED,
+        window_width, window_height,
+        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+
+    if (!window)
+    {
+        Printf("Failed to create a window: %s\n", SDL_GetError());
+        return -1;
+    }
+
+    SDL_GLContext context = SDL_GL_CreateContext(window);
+    SDL_GL_SetSwapInterval(0);
+
+    // init audio
     audio.num_streams = 0;
 
     SDL_AudioSpec audio;
@@ -368,59 +508,97 @@ int main(int argc, char **argv)
         Assert(false);
     }
 
-    audio_id bgm1 = audio_stream(bgm2_src);
-    audio_id bgm2 = audio_stream(bgm2_src);
-    audio_id sfx1 = audio_stream(sfx1_src);
-    audio_play(bgm1);
-    audio_master_gain(1.0f, 1.0f);
+    SDL_PauseAudio(0);
+
+    GameInput input = {};
+    input.window_width = window_width;
+    input.window_height = window_height;
 
     u64 start_tick = get_tick();
     r32 frame_time = 1.0f / 60.0f;
     r32 tick_timer = 0.0f;
     u64 frame_tick = start_tick;
-    u64 last_update = start_tick;
-
-    SDL_PauseAudio(0);
-    bool running = 1;
+    bool running = true;
     while (running)
     {
+        SDL_Event event;
+        while (SDL_PollEvent(&event))
+        {
+            switch (event.type)
+            {
+                case SDL_WINDOWEVENT:
+                {
+                    switch (event.window.event)
+                    {
+                        case SDL_WINDOWEVENT_SIZE_CHANGED:
+                        {
+                            Printf("Window %d size changed to %dx%d\n",
+                                    event.window.windowID,
+                                    event.window.data1,
+                                    event.window.data2);
+                            window_width = event.window.data1;
+                            window_height = event.window.data2;
+                            input.window_width = window_width;
+                            input.window_height = window_height;
+                        } break;
+                    }
+                } break;
+
+                case SDL_KEYDOWN:
+                {
+                    if (event.key.keysym.sym == SDLK_ESCAPE)
+                        running = false;
+                    input.key.down[event.key.keysym.scancode] = 1;
+                } break;
+
+                case SDL_KEYUP:
+                {
+                    if (input.key.down[event.key.keysym.scancode])
+                    {
+                        input.key.down[event.key.keysym.scancode] = 0;
+                        input.key.released[event.key.keysym.scancode] = 1;
+                    }
+                } break;
+
+                case SDL_QUIT:
+                {
+                    running = false;
+                } break;
+            }
+        }
+
         if (tick_timer <= 0.0f)
         {
-            // game update
-            {
-                r32 t = time_since(start_tick);
-                r32 gain_l = 0.2f * (0.5f + 0.5f * sin(t));
-                r32 gain_r = 0.2f * (0.5f + 0.5f * cos(t));
-                audio_gain(bgm1, gain_l, gain_r);
-
-                // artificial delay, to save battery
-                SDL_Delay(10);
-
-                if (time_since(start_tick) > 2.0f)
-                {
-                    audio_play(bgm2);
-                    audio_gain(bgm2, gain_r, gain_l);
-                }
-
-                if (time_since(start_tick) > 4.0f)
-                {
-                    audio_stop(bgm1);
-                    audio_play(sfx1, Audio_Repeat);
-                }
-            }
-
-            Printf("update %.2f %.2f\n",
-                   1000.0f * time_since(last_update),
-                   audio_time_in_seconds(audio_time(bgm2)));
-            last_update = get_tick();
+            r32 elapsed_time = time_since(start_tick);
+            input.t = elapsed_time;
+            input.dt = frame_time;
+            game_update(input);
             tick_timer += frame_time;
+            SDL_GL_SwapWindow(window);
+
+            // We have now processed these events!
+            for (int i = 0; i < SDL_NUM_SCANCODES; i++)
+                input.key.released[i] = 0;
+
+            SDL_Delay(10);
         }
+
+        GLenum error = glGetError();
+        if (error != GL_NO_ERROR)
+        {
+            Printf("An OGL error occurred\n");
+            running = false;
+        }
+
         u64 now = get_tick();
         tick_timer -= get_elapsed_time(frame_tick, now);
         frame_tick = now;
     }
-    SDL_CloseAudio();
 
+    SDL_CloseAudio();
+    SDL_GL_DeleteContext(context);
+    SDL_DestroyWindow(window);
     SDL_Quit();
+
     return 0;
 }
