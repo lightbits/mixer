@@ -75,7 +75,7 @@ typedef int8_t      s08;
 #define Audio_Format AUDIO_S16
 #define Audio_Bytes_Per_Sample (SDL_AUDIO_BITSIZE(Audio_Format)/8)
 #define Audio_Channels 2
-#define Audio_Frame_Size 735
+#define Audio_Frame_Size 1024
 #define Audio_BufLenInSamples(x) (x / (Audio_Bytes_Per_Sample))
 #define Audio_BufLenInSamplesPerChannel(x) (x / (Audio_Channels*Audio_Bytes_Per_Sample))
 #define Audio_BufLenInSeconds(x) (x / (r32)(Audio_Sample_Rate*Audio_Bytes_Per_Sample*Audio_Channels))
@@ -108,6 +108,8 @@ struct Audio
 {
     audio_Stream streams[Audio_Max_Streams];
     int num_streams;
+    r32 gain_l;
+    r32 gain_r;
 } audio;
 
 typedef int audio_id;
@@ -123,22 +125,27 @@ typedef int audio_id;
 audio_id audio_stream(audio_Source source)
 {
     SDL_LockAudio();
-    audio_id id = Audio_Invalid_Stream;
-    if (audio.num_streams < Audio_Max_Streams)
+    audio_id result = Audio_Invalid_Stream;
+    // find first available stream
+    for (int id = 0; id < Audio_Max_Streams; id++)
     {
-        id = audio.num_streams;
-        audio.streams[id].source = source;
-        audio.streams[id].position = 0;
-        audio.streams[id].paused = 1;
-        audio.streams[id].active = 1;
-        audio.streams[id].repeat = 0;
-        audio.streams[id].gain_l = 1.0f;
-        audio.streams[id].gain_r = 1.0f;
-        audio.streams[id].remaining = source.length;
-        audio.num_streams++;
+        if (!audio.streams[id].active)
+        {
+            result = id;
+            audio.streams[id].source = source;
+            audio.streams[id].position = 0;
+            audio.streams[id].paused = 1;
+            audio.streams[id].active = 1;
+            audio.streams[id].repeat = 0;
+            audio.streams[id].gain_l = 1.0f;
+            audio.streams[id].gain_r = 1.0f;
+            audio.streams[id].remaining = source.length;
+            audio.num_streams++;
+            break;
+        }
     }
     SDL_UnlockAudio();
-    return id;
+    return result;
 }
 
 void audio_close(audio_id id)
@@ -206,6 +213,12 @@ int audio_time(audio_id id)
 r32 audio_time_in_seconds(int samples_per_channel)
 {
     return samples_per_channel / (r32)(Audio_Sample_Rate);
+}
+
+void audio_master_gain(r32 left, r32 right)
+{
+    audio.gain_l = left;
+    audio.gain_r = right;
 }
 
 void audio_gain(audio_id id, r32 left, r32 right)
@@ -294,7 +307,7 @@ void audio_callback(void *userdata,
     Assert(bytes_to_fill % (Audio_Channels*Audio_Bytes_Per_Sample) == 0);
     s32 samples_to_fill = bytes_to_fill / Audio_Bytes_Per_Sample;
 
-    #define MIX_BUFFER_SAMPLES (1024*Audio_Channels)
+    #define MIX_BUFFER_SAMPLES (2048*Audio_Channels)
     Assert(MIX_BUFFER_SAMPLES >= samples_to_fill);
 
     // mix sources
@@ -312,8 +325,8 @@ void audio_callback(void *userdata,
 
         audio_Source source = stream->source;
 
-        r32 gain_l = stream->gain_l;
-        r32 gain_r = stream->gain_r;
+        r32 gain_l = audio.gain_l * stream->gain_l;
+        r32 gain_r = audio.gain_r * stream->gain_r;
 
         for (int sample_index = 0;
              sample_index < samples_to_fill;
@@ -409,6 +422,7 @@ int main(int argc, char **argv)
     audio_id bgm2 = audio_stream(bgm2_src);
     audio_id sfx1 = audio_stream(sfx1_src);
     audio_play(bgm1);
+    audio_master_gain(1.0f, 1.0f);
 
     u64 start_tick = get_tick();
     r32 frame_time = 1.0f / 60.0f;
@@ -443,15 +457,11 @@ int main(int argc, char **argv)
                     audio_stop(bgm1);
                     audio_play(sfx1, Audio_Repeat);
                 }
-                // else if (time_since(start_tick) > 2.0f)
-                // {
-                //     audio_StopSource(&mixer, &bgm2);
-                // }
             }
 
-            Printf("update %.2f %d\n",
+            Printf("update %.2f %.2f\n",
                    1000.0f * time_since(last_update),
-                   0);
+                   audio_time_in_seconds(audio_time(bgm2)));
             last_update = get_tick();
             tick_timer += frame_time;
         }
