@@ -159,6 +159,13 @@ int audio_time(audio_id id)
     return result;
 }
 
+bool audio_playing(audio_id id)
+{
+    return (id >= 0 &&
+            audio.streams[id].active &&
+            !audio.streams[id].paused);
+}
+
 // Converts the result from a call to audio_time
 // to seconds.
 r32 audio_time_in_seconds(int samples_per_channel)
@@ -345,6 +352,7 @@ struct GameInput
     struct Key
     {
         bool down[SDL_NUM_SCANCODES];
+        bool pushed[SDL_NUM_SCANCODES];
         bool released[SDL_NUM_SCANCODES];
     } key;
     int window_width;
@@ -354,6 +362,7 @@ struct GameInput
 };
 
 #define KEY_RELEASED(code) input.key.released[SDL_SCANCODE_##code]
+#define KEY_PUSHED(code) input.key.pushed[SDL_SCANCODE_##code]
 #define KEY_DOWN(code) input.key.down[SDL_SCANCODE_##code]
 void game_update(GameInput input)
 {
@@ -393,11 +402,11 @@ void game_update(GameInput input)
         sfx6 = audio_stream(sfx6_src);
         bgm1 = audio_stream(bgm2_src);
         bgm2 = audio_stream(bgm2_src);
-        audio_master_gain(0.01f, 0.01f);
+        audio_master_gain(0.5f, 0.5f);
         loaded = 1;
     }
 
-    #define PLAY_ON_KEY(key, sound) { if (KEY_RELEASED(key)) { audio_play(sound, Audio_Restart); audio_gain(sound, 1.0f, 1.0f); } }
+    #define PLAY_ON_KEY(key, sound) { if (KEY_PUSHED(key)) { audio_play(sound, Audio_Restart); audio_gain(sound, 1.0f, 1.0f); } }
 
     r32 t = input.t;
     PLAY_ON_KEY(1, sfx1);
@@ -406,11 +415,7 @@ void game_update(GameInput input)
     PLAY_ON_KEY(4, sfx4);
     PLAY_ON_KEY(5, sfx5);
     PLAY_ON_KEY(6, sfx6);
-
-    if (KEY_RELEASED(SPACE))
-    {
-        audio_play(bgm2);
-    }
+    PLAY_ON_KEY(SPACE, bgm2);
 
     audio_gain(bgm2, 0.5f+0.5f*sin(t), 0.5f+0.5f*cos(t));
 
@@ -548,16 +553,16 @@ int main(int argc, char **argv)
                 {
                     if (event.key.keysym.sym == SDLK_ESCAPE)
                         running = false;
+                    if (!input.key.down[event.key.keysym.scancode])
+                        input.key.pushed[event.key.keysym.scancode] = 1;
                     input.key.down[event.key.keysym.scancode] = 1;
                 } break;
 
                 case SDL_KEYUP:
                 {
                     if (input.key.down[event.key.keysym.scancode])
-                    {
-                        input.key.down[event.key.keysym.scancode] = 0;
                         input.key.released[event.key.keysym.scancode] = 1;
-                    }
+                    input.key.down[event.key.keysym.scancode] = 0;
                 } break;
 
                 case SDL_QUIT:
@@ -578,7 +583,10 @@ int main(int argc, char **argv)
 
             // We have now processed these events!
             for (int i = 0; i < SDL_NUM_SCANCODES; i++)
+            {
+                input.key.pushed[i] = 0;
                 input.key.released[i] = 0;
+            }
 
             SDL_Delay(10);
         }
